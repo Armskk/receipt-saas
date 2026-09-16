@@ -1,0 +1,171 @@
+// Prisma schema — self-hosted Postgres, multi-tenant via workspaceId.
+//
+// Row-Level Security: Prisma can't declare RLS policies itself. After your
+// first migration, run prisma/rls.sql once against the database — it locks
+// every workspace-scoped table so a query missing a workspaceId filter
+// returns nothing instead of leaking another tenant's rows. This is a
+// second line of defense on top of the application-level scoping already
+// done in each service (see workspaces/workspace.guard.ts).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum ReceiptSource {
+  WEB
+  LINE
+  TELEGRAM
+}
+
+enum ReceiptStatus {
+  PENDING     // uploaded, queued for the agent
+  PROCESSING  // worker picked it up, calling Claude now
+  PARSED      // agent extracted data, awaiting user confirmation
+  CONFIRMED   // user confirmed the parsed data is correct
+  FAILED      // agent could not parse it (bad image, API error, etc.)
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships WorkspaceMember[]
+  receipts    Receipt[] @relation("ReceiptCreatedBy")
+
+  @@map("users")
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  // External-channel identifiers so an inbound LINE/Telegram message can be
+  // routed to the right workspace without the sender logging into the web app.
+  lineUserId     String? @unique
+  telegramChatId String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members    WorkspaceMember[]
+  categories Category[]
+  receipts   Receipt[]
+  usageLogs  UsageLog[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  items     ReceiptItem[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("categories")
+}
+
+model Receipt {
+  id          String        @id @default(cuid())
+  workspaceId String
+  source      ReceiptSource
+  // Message/update id from LINE or Telegram, or null for web uploads —
+  // used to de-duplicate if a webhook retries delivery.
+  sourceRef   String?
+  // One or more object keys in the S3/MinIO bucket. A single web upload can
+  // carry several photos of the SAME receipt (long receipt shot in sections,
+  // front/back, multi-page bill) — the agent sees them all in one call and
+  // produces one result. LINE/Telegram messages carry one image each.
+  imageKeys   String[]
+  merchantName String?
+  purchaseDate DateTime?
+  currency     String    @default("THB")
+  subtotal     Decimal?  @db.Decimal(12, 2)
+  discountTotal Decimal? @db.Decimal(12, 2)
+  total        Decimal?  @db.Decimal(12, 2)
+  status       ReceiptStatus @default(PENDING)
+  // Full raw JSON the agent returned, kept for audit/debugging even after
+  // it's been normalized into ReceiptItem rows.
+  rawAgentResponse Json?
+  failureReason    String?
+  createdByUserId  String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser User?         @relation("ReceiptCreatedBy", fields: [createdByUserId], references: [id])
+  items         ReceiptItem[]
+  usageLogs     UsageLog[]
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, status])
+  @@map("receipts")
+}
+
+model ReceiptItem {
+  id          String   @id @default(cuid())
+  receiptId   String
+  categoryId  String?
+  description String
+  quantity    Decimal? @db.Decimal(10, 3)
+  unitPrice   Decimal? @db.Decimal(12, 2)
+  amount      Decimal  @db.Decimal(12, 2)
+  createdAt   DateTime @default(now())
+
+  receipt  Receipt   @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id])
+
+  @@index([receiptId])
+  @@map("receipt_items")
+}
+
+// One row per Claude API call, so you can meter cost per workspace and set
+// pricing tiers off real usage instead of guessing (see earlier plan notes).
+model UsageLog {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  receiptId    String?
+  inputTokens  Int?
+  outputTokens Int?
+  imageCount   Int      @default(1)
+  estimatedCostUsd Decimal? @db.Decimal(10, 4)
+  createdAt    DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  receipt   Receipt?  @relation(fields: [receiptId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@map("usage_logs")
+}
