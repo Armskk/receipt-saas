@@ -20,8 +20,14 @@ export class StorageService implements OnModuleInit {
 
   async onModuleInit() {
     const exists = await this.client.bucketExists(this.bucket).catch(() => false);
-    if (!exists) {
+    if (exists) return;
+    try {
       await this.client.makeBucket(this.bucket);
+    } catch (err) {
+      // bucketExists -> makeBucket isn't atomic: the API and the worker both run
+      // this on startup, so on a fresh MinIO the other process can create the
+      // bucket between our check and our create. That's the outcome we wanted.
+      if ((err as { code?: string }).code !== 'BucketAlreadyOwnedByYou') throw err;
     }
   }
 
