@@ -114,6 +114,9 @@ export default function DashboardPage() {
             <Link className="tab" href="/summary">
               Monthly summary
             </Link>
+            <Link className="tab" href="/connect">
+              Connect chat
+            </Link>
           </nav>
           {workspaces.length > 1 ? (
             <select

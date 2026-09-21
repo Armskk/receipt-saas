@@ -214,6 +214,40 @@ export function confirmReceipt(workspaceId: string, receiptId: string) {
   );
 }
 
+// --- Chat channels (LINE / Telegram) ---
+
+export type ChannelName = 'line' | 'telegram';
+
+// Which chats are linked to the workspace (the ids themselves are never sent).
+export interface ChannelStatus {
+  line: boolean;
+  telegram: boolean;
+}
+
+export interface LinkCode {
+  code: string; // e.g. ABCD-2345
+  expiresAt: string;
+}
+
+export function getChannelStatus(workspaceId: string) {
+  return apiFetch<ChannelStatus>(`/workspaces/${workspaceId}/channels`);
+}
+
+// Owners/admins only. The user sends this code to the bot to link their chat.
+export function createLinkCode(workspaceId: string, channel: ChannelName) {
+  return apiFetch<LinkCode>(
+    `/workspaces/${workspaceId}/channels/${channel}/link-code`,
+    { method: 'POST' },
+  );
+}
+
+export function unlinkChannel(workspaceId: string, channel: ChannelName) {
+  return apiFetch<ChannelStatus>(
+    `/workspaces/${workspaceId}/channels/${channel}`,
+    { method: 'DELETE' },
+  );
+}
+
 export interface MonthlySummary {
   month: string; // YYYY-MM
   currency: string;

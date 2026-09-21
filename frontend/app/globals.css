@@ -388,3 +388,54 @@ button.link {
   font-size: 0.7rem;
   color: var(--muted);
 }
+
+/* --- connect chat --- */
+
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.channel-card {
+  display: grid;
+  gap: 0.85rem;
+  align-content: start;
+}
+
+.channel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.channel-head h2 {
+  margin: 0;
+}
+
+.channel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.code-box {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.9rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-align: center;
+  padding: 0.75rem 1rem;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  user-select: all;
+}
+
+.steps {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.25rem;
+}

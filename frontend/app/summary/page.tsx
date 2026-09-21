@@ -79,6 +79,9 @@ export default function SummaryPage() {
               Receipts
             </Link>
             <span className="tab active">Monthly summary</span>
+            <Link className="tab" href="/connect">
+              Connect chat
+            </Link>
           </nav>
           {workspaces.length > 1 ? (
             <select
