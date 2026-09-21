@@ -3,6 +3,19 @@
 Short records of architectural decisions that aren't obvious from the code.
 Newest first.
 
+## 2026-09-21 — Three long-lived branches: dev → stg → main (= production)
+
+**Context.** One branch, no CI, never deployed. Wanted a dev/staging/production flow before the first deploy.
+
+**Decisions.**
+
+1. **`feature/* → dev → stg → main`**, with **`main` as production** (no separate `production` branch — keeps the existing default name and every reference to it).
+2. **`dev` is the repository default branch** so PRs target it by default.
+3. **Promotion PRs use merge commits, never squash**; squash is fine for `feature → dev`. Squashing promotions makes the long-lived branches diverge.
+4. **Enforcement is CI + convention, not GitHub settings.** The repo is private on GitHub Free, where branch protection, rulesets and environment required-reviewers are unavailable. `.github/workflows/ci.yml` has an advisory `flow-guard` job that fails wrong-direction PRs, plus `backend` and `frontend` jobs. Revisit if the repo goes public or to Pro (Step 5 in `docs/environments.md`).
+5. **`dev` is local-only; only stg and prod run on the (single, free) Oracle VM**, as separate compose projects with separate secrets, bots and data. Rollout is queued in `docs/environments.md`.
+6. CI runs eslint directly (`--max-warnings 0`) instead of `npm run lint`, because the script uses `--fix` and would rewrite files and still pass.
+
 ## 2026-09-21 — Enforce tenant isolation with Postgres RLS
 
 **Context.** Multi-tenancy was enforced only in application code (`WorkspaceGuard` +
