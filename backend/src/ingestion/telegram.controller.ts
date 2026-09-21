@@ -11,7 +11,10 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../common/storage.service';
 import { ReceiptsService } from '../receipts/receipts.service';
+import { ChannelLinkService } from '../workspaces/channel-link.service';
+import { channelMessages } from '../workspaces/channel-messages';
 import { RECEIPT_PROCESSING_QUEUE, ReceiptProcessingJob } from '../queue/receipt-processing.types';
+import { ChannelMessenger } from './channel-messenger.service';
 
 // Telegram Bot API webhook. After creating the bot via @BotFather, register
 // this URL with:
@@ -26,6 +29,8 @@ export class TelegramController {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly receipts: ReceiptsService,
+    private readonly channelLinks: ChannelLinkService,
+    private readonly messenger: ChannelMessenger,
     @InjectQueue(RECEIPT_PROCESSING_QUEUE) private readonly queue: Queue<ReceiptProcessingJob>,
   ) {}
 
@@ -47,19 +52,28 @@ export class TelegramController {
 
   private async handleUpdate(update: any) {
     const message = update.message;
-    const photos = message?.photo; // array of PhotoSize, smallest -> largest
-    if (!photos || photos.length === 0) return;
-
-    const chatId: string | undefined = message.chat?.id?.toString();
+    const chatId: string | undefined = message?.chat?.id?.toString();
     if (!chatId) return;
 
-    // Same caveat as the LINE controller: linking a Telegram chat to a
-    // workspace needs a dashboard flow that isn't scaffolded yet.
+    // A text message is a link code from the dashboard's "Connect chat" page —
+    // either typed, or sent by the t.me/<bot>?start=<code> deep link as
+    // "/start <code>" — or noise (see ChannelLinkService.handleText).
+    if (typeof message.text === 'string') {
+      const reply = await this.channelLinks.handleText('TELEGRAM', chatId, message.text);
+      if (reply) await this.messenger.sendTelegram(chatId, reply);
+      return;
+    }
+
+    const photos = message.photo; // array of PhotoSize, smallest -> largest
+    if (!photos || photos.length === 0) return;
+
+    // The workspace must already have this chat linked (see ChannelLinkService).
     const workspace = await this.prisma.workspace.findUnique({
       where: { telegramChatId: chatId },
     });
     if (!workspace) {
       this.logger.warn(`Received photo from unlinked Telegram chat ${chatId} — ignoring`);
+      await this.messenger.sendTelegram(chatId, channelMessages.notLinkedHelp);
       return;
     }
 

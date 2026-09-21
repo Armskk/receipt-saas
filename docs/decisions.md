@@ -3,6 +3,23 @@
 Short records of architectural decisions that aren't obvious from the code.
 Newest first.
 
+## 2026-09-22 — Linking a LINE/Telegram chat to a workspace with one-time codes
+
+**Context.** The webhooks looked up `Workspace.lineUserId` / `telegramChatId`, but nothing ever set them, so a message from any real user was logged and dropped. The bot can't know which workspace a stranger's chat belongs to, and asking them to log in inside LINE/Telegram isn't an option.
+
+**Decisions.**
+
+1. **The dashboard issues a code, the user sends it to the bot.** `POST /workspaces/:id/channels/:channel/link-code` returns `ABCD-2345` (8 symbols from a 32-char alphabet without 0/O/1/I, ≈40 bits, from `crypto.randomInt`). It's valid for 10 minutes, once, for that channel only; a new code replaces any earlier unused one. Telegram also accepts the `/start <code>` deep link (`t.me/<bot>?start=<code>`).
+2. **Only a SHA-256 of the code is stored** (`channel_link_codes.codeHash`), so a database leak doesn't hand out live codes.
+3. **`channel_link_codes` is not under RLS**, like `workspaces`: the bot redeems the code *before* it knows the workspace, so there's no `app.current_workspace_id` to set. The tenant boundary is instead the code itself — it can only ever link the workspace it was issued for (covered by `channel-link.service.spec.ts`). Issuing/unlinking goes through `JwtAuthGuard` + `WorkspaceGuard` and additionally requires OWNER/ADMIN, because whoever controls the chat can add receipts to the workspace.
+4. **Redeeming is atomic and doesn't burn the code on failure.** One transaction checks the code (exists, right channel, unused, unexpired), refuses if the chat already belongs to a *different* workspace, then spends the code with a conditional `updateMany` (so two simultaneous redemptions can't both win) and writes the link. A unique-constraint race on `lineUserId`/`telegramChatId` rolls back and reports "already linked". Re-linking a workspace to a new chat replaces the old link.
+5. **The bot answers**: confirmation on success; "invalid or expired" / "already linked to another workspace" on failure; a how-to for an unlinked chat that sends other text, a photo, or follows the LINE bot. A linked chat's other text is ignored. Replies are best-effort (`ChannelMessenger` only logs failures) and are skipped when the channel token isn't configured.
+6. **The API only exposes booleans** (`GET .../channels` → `{ line, telegram }`), never the LINE user id or chat id.
+
+**Known limits.** No throttling of guesses through the bot (the code space and 10-minute single-use window are the defence). Used codes are only purged when the workspace next issues one. Telegram group chats and LINE groups/rooms aren't specially handled (LINE uses `source.userId`; a Telegram group's chat id links like any other chat). Unlinking is by channel, not per chat.
+
+**Consequences.** A workspace has at most one LINE chat and one Telegram chat. Anything new that must run before the workspace is known follows the same pattern as here: not under RLS, and covered by a test that shows the tenant boundary.
+
 ## 2026-09-21 — The receipt processor is registered only in the worker process
 
 **Context.** `ReceiptProcessingProcessor` was a provider of `QueueModule`, which `AppModule` imports, and both `main.ts` and `worker.ts` booted `AppModule`. So the API process also started a BullMQ worker, competed for jobs and called Claude itself — the opposite of why the worker is a separate process (webhooks must get a fast 200 OK). Found in the first end-to-end run.

@@ -5,7 +5,10 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../common/storage.service';
 import { ReceiptsService } from '../receipts/receipts.service';
+import { ChannelLinkService } from '../workspaces/channel-link.service';
+import { channelMessages } from '../workspaces/channel-messages';
 import { RECEIPT_PROCESSING_QUEUE, ReceiptProcessingJob } from '../queue/receipt-processing.types';
+import { ChannelMessenger } from './channel-messenger.service';
 
 // LINE Messaging API webhook. Register this URL (https://api.yourdomain.com/webhooks/line)
 // in the LINE Developers Console for your Messaging API channel.
@@ -18,6 +21,8 @@ export class LineController {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly receipts: ReceiptsService,
+    private readonly channelLinks: ChannelLinkService,
+    private readonly messenger: ChannelMessenger,
     @InjectQueue(RECEIPT_PROCESSING_QUEUE) private readonly queue: Queue<ReceiptProcessingJob>,
   ) {}
 
@@ -52,18 +57,34 @@ export class LineController {
   }
 
   private async handleEvent(event: any) {
-    if (event.type !== 'message' || event.message?.type !== 'image') return;
-
     const lineUserId: string | undefined = event.source?.userId;
     if (!lineUserId) return;
 
-    // The workspace must already have this LINE user linked (via a
-    // dashboard "connect LINE" flow — not scaffolded yet: it'd be a
-    // one-time code shown in the web app that the user sends to the bot,
-    // which a handler here looks up and writes to Workspace.lineUserId).
+    // Someone just added the bot: tell them how to connect, unless they already are.
+    if (event.type === 'follow') {
+      if (!(await this.channelLinks.isLinked('LINE', lineUserId))) {
+        await this.messenger.replyLine(event.replyToken, channelMessages.notLinkedHelp);
+      }
+      return;
+    }
+
+    if (event.type !== 'message') return;
+
+    // A text message is either a link code from the dashboard's "Connect chat"
+    // page (which links this LINE user to a workspace) or noise.
+    if (event.message?.type === 'text') {
+      const reply = await this.channelLinks.handleText('LINE', lineUserId, event.message.text);
+      if (reply) await this.messenger.replyLine(event.replyToken, reply);
+      return;
+    }
+
+    if (event.message?.type !== 'image') return;
+
+    // The workspace must already have this LINE user linked (see ChannelLinkService).
     const workspace = await this.prisma.workspace.findUnique({ where: { lineUserId } });
     if (!workspace) {
       this.logger.warn(`Received image from unlinked LINE user ${lineUserId} — ignoring`);
+      await this.messenger.replyLine(event.replyToken, channelMessages.notLinkedHelp);
       return;
     }
 

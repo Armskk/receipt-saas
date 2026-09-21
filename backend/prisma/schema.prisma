@@ -24,6 +24,13 @@ enum WorkspaceRole {
   MEMBER
 }
 
+// Chat channels a workspace can be linked to (a subset of ReceiptSource: WEB
+// isn't a chat channel).
+enum ChannelType {
+  LINE
+  TELEGRAM
+}
+
 enum ReceiptSource {
   WEB
   LINE
@@ -66,8 +73,29 @@ model Workspace {
   categories Category[]
   receipts   Receipt[]
   usageLogs  UsageLog[]
+  linkCodes  ChannelLinkCode[]
 
   @@map("workspaces")
+}
+
+// A one-time code the dashboard shows and the user sends to the LINE/Telegram
+// bot to link that chat to the workspace (sets Workspace.lineUserId /
+// telegramChatId). Only a SHA-256 of the code is stored. Deliberately NOT under
+// RLS: the bot handler looks the code up before it knows the workspace — same
+// reason as `workspaces` (see docs/decisions.md).
+model ChannelLinkCode {
+  id          String      @id @default(cuid())
+  workspaceId String
+  channel     ChannelType
+  codeHash    String      @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime    @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, channel])
+  @@map("channel_link_codes")
 }
 
 model WorkspaceMember {
