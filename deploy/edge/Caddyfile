@@ -1,0 +1,3 @@
+# Global Caddyfile of the shared edge (docker-compose.edge.yml). Each environment
+# contributes its own site file, mounted only when that environment is enabled.
+import /etc/caddy/sites/*.caddy

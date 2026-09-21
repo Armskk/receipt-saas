@@ -1,0 +1,11 @@
+# Production. Backend/frontend are reached by their per-environment network aliases
+# (see docker-compose.prod.yml), never by the plain service names.
+{$PROD_APP_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy production-frontend:3000
+}
+
+{$PROD_API_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy production-backend:3001
+}

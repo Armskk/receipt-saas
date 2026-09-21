@@ -3,6 +3,22 @@
 Short records of architectural decisions that aren't obvious from the code.
 Newest first.
 
+## 2026-09-22 — Deployed environments: private compose projects behind one shared Caddy
+
+**Context.** Before the first deploy the compose file published Postgres, Redis, MinIO, the API and the frontend on every host interface (`5432/6379/9000/9001/3001/3000`), had a Caddy per stack (two projects on one VM can't both bind 80/443), read fixed `backend/.env` / `frontend/.env.local` paths, and `.gitignore` did not cover `.env.stg` / `.env.production` even though the docs said it did.
+
+**Decisions.**
+
+1. **One compose project per environment, layered with `docker-compose.prod.yml`.** The override strips every host port (`ports: !reset []`, hence Compose ≥ 2.24), points each service at that environment's env files, switches the per-project Caddy off behind a profile, and rotates container logs. The base file stays the dev stack.
+2. **One shared Caddy in its own project (`docker-compose.edge.yml`)**, the only thing publishing ports, and only TCP 80/443 (no HTTP/3, matching the 22/80/443 firewall rule). It joins the external network `receipt-edge` (created once per VM). Backend and frontend join that network under **per-environment aliases** (`<env>-backend`, `<env>-frontend`), because compose otherwise gives every project's `backend` the plain name `backend` on a shared network. Postgres/Redis/MinIO/worker stay off it, so the edge can't even resolve them.
+3. **An environment is enabled by mounting its site file** (`EDGE_STG_SITE` / `EDGE_PROD_SITE` in `.env.edge`); a disabled one gets an empty file, so Caddy never requests certificates for domains that aren't set up. The edge is its own project so an environment can be rebuilt or torn down without touching TLS or the other environment (checked: tearing down stg leaves production and the edge serving).
+4. **Secrets are generated, never copied** (`scripts/init-env.sh`): fresh random values per environment for the DB passwords, MinIO credentials, JWT secret and webhook secret. The **DB owner URL is not in the API/worker env** (only in the root env file, for the migration step). In dev `backend/.env` does carry it, for the Prisma CLI; the running API/worker only need `APP_DATABASE_URL`, so the deployed containers get no more than that (verified: the API boots in production mode without it, and PrismaService refuses to run in production as a role that bypasses RLS).
+5. **`.gitignore` now ignores every `.env.*` except `*.example`.**
+6. **Dev ports bind to `127.0.0.1`** so a laptop on public Wi-Fi doesn't expose Postgres/Redis/MinIO.
+7. **`scripts/check-compose.mjs`, run in CI (`compose` job),** asserts the properties above on the rendered config (no host ports outside the edge, private services only on the private network, distinct secrets/aliases, no owner credentials in the app env, dev on loopback) without starting containers.
+
+**Consequences.** Adding a service that needs to be reachable from outside means routing it through the edge, not publishing a port. A new environment needs a new site file and its own `ENV_NAME`-prefixed aliases. The firewall (VCN security list + iptables) is documented but can only be applied and verified once the VM exists; Docker-published ports bypass `INPUT` rules, which is why the compose layer is the primary defence.
+
 ## 2026-09-22 — Linking a LINE/Telegram chat to a workspace with one-time codes
 
 **Context.** The webhooks looked up `Workspace.lineUserId` / `telegramChatId`, but nothing ever set them, so a message from any real user was logged and dropped. The bot can't know which workspace a stranger's chat belongs to, and asking them to log in inside LINE/Telegram isn't an option.

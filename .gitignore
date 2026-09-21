@@ -5,7 +5,11 @@ dist/
 .env
 .env.local
 .env.*.local
+# Per-environment files (.env.stg, .env.production, .env.edge, backend/.env.stg, ...) hold real secrets.
+# Only *.example files are committed.
+.env.*
 !.env.example
+!.env.*.example
 .DS_Store
 coverage/
 .turbo/
