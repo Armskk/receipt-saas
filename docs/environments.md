@@ -41,7 +41,7 @@ Real env files (`.env`, `backend/.env`, `.env.stg`, `.env.production`, …) are 
 Step 1 (branches, CI, these docs) is done. The rest is queued in this order.
 
 ### Step 2 — make the stack deployable
-- [ ] Fix the two known bugs first: (a) `ReceiptProcessingProcessor` is registered in `QueueModule`, which both `main.ts` and `worker.ts` load, so the API also consumes jobs and calls Claude — register it only in the worker process; (b) API/worker race creating the MinIO bucket in `storage.service.ts#onModuleInit` — tolerate `BucketAlreadyOwnedByYou`.
+- [ ] Fix the two known bugs first: (a) ~~`ReceiptProcessingProcessor` is registered in `QueueModule`, which both `main.ts` and `worker.ts` load, so the API also consumes jobs and calls Claude — register it only in the worker process~~ **done** — it's now provided only by `WorkerModule`, the worker's root module; (b) API/worker race creating the MinIO bucket in `storage.service.ts#onModuleInit` — tolerate `BucketAlreadyOwnedByYou`.
 - [ ] `docker-compose.prod.yml` override: drop the published ports for Postgres/Redis/MinIO (`5432/6379/9000/9001` are currently open on all interfaces); expose backend/frontend only to Caddy (or `127.0.0.1`); only Caddy publishes 80/443. Run each env as its own project (`docker compose -p receipt-stg …`, `-p receipt-prod …`); one Caddy routes by domain.
 - [ ] Per-env env files (gitignored) with distinct secrets; consider a spend cap / cheaper model for `ANTHROPIC_API_KEY` on stg.
 - [ ] Frontend build arg: `NEXT_PUBLIC_API_URL` is inlined at `next build` but compose only supplies it at runtime — add `ARG NEXT_PUBLIC_API_URL` to `frontend/Dockerfile`, pass it per environment, and check `.dockerignore` so `.env.local` isn't copied into images.

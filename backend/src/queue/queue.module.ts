@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { AgentModule } from '../agent/agent.module';
-import { ReceiptsModule } from '../receipts/receipts.module';
-import { ReceiptProcessingProcessor } from './receipt-processing.processor';
 import { RECEIPT_PROCESSING_QUEUE } from './receipt-processing.types';
 
+// Queue plumbing shared by both processes: the API enqueues through it, the
+// worker consumes through it. The consumer itself (ReceiptProcessingProcessor)
+// is deliberately NOT provided here — it lives in WorkerModule, so the API
+// process never starts a BullMQ worker or reaches the Claude client.
 @Module({
   imports: [
     BullModule.forRoot({
@@ -20,10 +21,7 @@ import { RECEIPT_PROCESSING_QUEUE } from './receipt-processing.types';
         backoff: { type: 'exponential', delay: 5000 },
       },
     }),
-    AgentModule,
-    ReceiptsModule,
   ],
-  providers: [ReceiptProcessingProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}

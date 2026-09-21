@@ -6,9 +6,10 @@ import { AgentService } from '../agent/agent.service';
 import { ReceiptsService } from '../receipts/receipts.service';
 import { RECEIPT_PROCESSING_QUEUE, ReceiptProcessingJob } from './receipt-processing.types';
 
-// This is the piece that actually does the slow work — see README "Why
-// things are wired this way". Runs in the `worker` process
-// (src/worker.ts), not the API process, so a burst of uploads never makes
+// This is the piece that actually does the slow work — see CLAUDE.md "Why
+// there's a separate worker process". Registered only in WorkerModule
+// (src/queue/worker.module.ts), so it runs in the `worker` process
+// (src/worker.ts), not the API process, and a burst of uploads never makes
 // LINE/Telegram webhooks or the web upload endpoint time out.
 @Processor(RECEIPT_PROCESSING_QUEUE)
 export class ReceiptProcessingProcessor extends WorkerHost {
