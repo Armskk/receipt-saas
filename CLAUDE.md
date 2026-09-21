@@ -21,6 +21,7 @@ Backend (`cd backend`):
 - `npm run build` — `nest build`; `npm run start:prod` runs the built API, `npm run worker:prod` runs the built worker
 - `npm run lint` — eslint with `--fix` over `src`
 - `npm test` — jest (in-band). The specs are integration tests against a real Postgres because RLS can't be mocked: set `TEST_DATABASE_URL` (owner role) and `TEST_APP_DATABASE_URL` (`receipts_app` role) to a dedicated `*_test` database — jest's global setup creates it if missing and runs `prisma migrate deploy`. Run a single file with `npx jest path/to/file.spec.ts`
+- `npm run e2e` — full split API/worker check (`scripts/e2e/`, see its README): runs the *built* API and worker as separate processes against a throwaway DB + bucket and a **real Claude call (~7 requests)**. Needs `npm run build`, `docker compose up -d postgres redis minio` and an idle queue; not part of CI
 - `npm run prisma:generate` — regenerate the Prisma client after editing `schema.prisma`
 - `npm run prisma:migrate` — `prisma migrate dev`. RLS policies and the app role's grants live in the hand-written `*_enable_rls` migration, so migrating applies them — there is no separate SQL script to run. `DATABASE_URL` (owner role) is used by the Prisma CLI only; the API and worker connect as the non-privileged `receipts_app` role via `APP_DATABASE_URL`. On a fresh Postgres volume `docker/postgres/init-app-role.sh` creates that role from `APP_DB_PASSWORD`; on an existing volume create it once by hand (the script's header has the command)
 
