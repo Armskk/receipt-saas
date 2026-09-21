@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, stg, main]
+  push:
+    branches: [dev, stg, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Enforces the promotion flow feature/* -> dev -> stg -> main. Advisory: the
+  # repo is private on GitHub Free, so it can't be made a required check.
+  flow-guard:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR direction
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          case "$BASE" in
+            stg)
+              if [ "$HEAD" != "dev" ]; then
+                echo "::error::PRs into stg must come from dev (got '$HEAD')"; exit 1
+              fi ;;
+            main)
+              case "$HEAD" in
+                stg|hotfix/*) ;;
+                *) echo "::error::PRs into main must come from stg or hotfix/* (got '$HEAD')"; exit 1 ;;
+              esac ;;
+          esac
+          echo "OK: '$HEAD' -> '$BASE'"
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci_owner
+          POSTGRES_PASSWORD: ci_owner_pw
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_owner"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      # Not `npm run lint`: that script uses --fix, which would rewrite files and pass.
+      - run: npx eslint "src/**/*.ts" --max-warnings 0
+      - run: npm run build
+      # The enable_rls migration only creates the role without a password; the
+      # tests log in as it, so give it one first (throwaway CI credentials).
+      - name: Create the receipts_app role
+        env:
+          PGPASSWORD: ci_owner_pw
+        run: >-
+          psql -h localhost -U ci_owner -d postgres -v ON_ERROR_STOP=1
+          -c "CREATE ROLE receipts_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'ci_app_pw'"
+      - name: Test
+        env:
+          TEST_DATABASE_URL: postgresql://ci_owner:ci_owner_pw@localhost:5432/receipts_ci_test?schema=public
+          TEST_APP_DATABASE_URL: postgresql://receipts_app:ci_app_pw@localhost:5432/receipts_ci_test?schema=public
+        run: npm test
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
