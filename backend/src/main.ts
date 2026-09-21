@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { resolveCorsOrigins } from './common/cors';
 
 async function bootstrap() {
   // rawBody: true — the LINE webhook needs the exact unparsed request body
@@ -18,7 +19,8 @@ async function bootstrap() {
     }),
   );
 
-  app.enableCors();
+  // Only the dashboard's origin(s) — see resolveCorsOrigins (CORS_ORIGINS; required in production).
+  app.enableCors({ origin: resolveCorsOrigins() });
 
   const port = process.env.PORT ?? 3001;
   await app.listen(port);

@@ -7,7 +7,8 @@
 //   - an environment (stg/production) publishes NO host ports; only the shared edge Caddy does (80/443)
 //   - Postgres/Redis/MinIO/worker are only on the environment's private network
 //   - two environments get different secrets and different edge aliases (so they can't collide)
-//   - the API/worker containers don't get the database OWNER credentials
+//   - only the one-shot `migrate` service gets the database OWNER credentials, and the API waits for it
+//   - the frontend's NEXT_PUBLIC_* values are build args; images don't contain .env files
 //   - the dev stack only binds its ports to localhost
 // Secrets are never printed, only the names of the checks.
 import { execFileSync } from 'node:child_process';
@@ -64,8 +65,8 @@ try {
     const c = compose(envProject(n));
     envs[n] = c;
     const names = Object.keys(c.services);
-    check('runs exactly postgres, redis, minio, backend, worker, frontend (no per-project Caddy)',
-      sameSet(names, ['postgres', 'redis', 'minio', 'backend', 'worker', 'frontend']), names.join(','));
+    check('runs exactly postgres, redis, minio, migrate, backend, worker, frontend (no per-project Caddy)',
+      sameSet(names, ['postgres', 'redis', 'minio', 'migrate', 'backend', 'worker', 'frontend']), names.join(','));
     const withPorts = Object.entries(c.services).filter(([, s]) => published(s).length).map(([k]) => k);
     check('publishes no host port on any service', withPorts.length === 0, `published: ${withPorts.join(',')}`);
     for (const s of ['backend', 'frontend']) {
@@ -73,7 +74,7 @@ try {
       check(`${s} is on default + edge with alias ${n}-${s}`,
         'default' in nets && (nets.edge?.aliases ?? []).includes(`${n}-${s}`), JSON.stringify(Object.keys(nets)));
     }
-    for (const s of ['postgres', 'redis', 'minio', 'worker']) {
+    for (const s of ['postgres', 'redis', 'minio', 'worker', 'migrate']) {
       check(`${s} is only on the private network`, sameSet(Object.keys(c.services[s].networks ?? {}), ['default']),
         Object.keys(c.services[s].networks ?? {}).join(','));
     }
@@ -85,7 +86,25 @@ try {
     check('backend uses the non-privileged DB role', /^postgresql:\/\/receipts_app:/.test(be.APP_DATABASE_URL ?? ''));
     check('API/worker do NOT receive the DB owner credentials', !('DATABASE_URL' in be) && !('OWNER_DATABASE_URL' in be));
     check('worker gets the same env as the backend', JSON.stringify(c.services.worker.environment) === JSON.stringify(be));
-    check('frontend has NEXT_PUBLIC_API_URL', !!c.services.frontend.environment?.NEXT_PUBLIC_API_URL);
+    check('backend has CORS_ORIGINS set to an https:// origin (required in production)', /^https:\/\//.test(be.CORS_ORIGINS ?? ''), be.CORS_ORIGINS ?? '(unset)');
+
+    // schema migrations run before the app starts, with the owner role — and only there
+    const mg = c.services.migrate;
+    check('migrate builds the migrate target and runs once (restart: no)', mg.build?.target === 'migrate' && mg.restart === 'no');
+    check('migrate is the ONLY service holding the DB owner URL',
+      /^postgresql:\/\/receipts:/.test(mg.environment?.DATABASE_URL ?? '')
+      && Object.entries(c.services).every(([k, v]) => k === 'migrate' || !('DATABASE_URL' in (v.environment ?? {}))));
+    for (const s of ['backend', 'worker']) {
+      check(`${s} waits for migrate to complete successfully`,
+        c.services[s].depends_on?.migrate?.condition === 'service_completed_successfully');
+    }
+    check('migrate waits for a healthy postgres', mg.depends_on?.postgres?.condition === 'service_healthy');
+    check('backend healthcheck calls /health', JSON.stringify(c.services.backend.healthcheck?.test ?? []).includes('/health'));
+
+    // frontend: NEXT_PUBLIC_* are build args (inlined at build time), and no runtime env file leaks in
+    const fe = c.services.frontend;
+    check('frontend gets NEXT_PUBLIC_API_URL as a build arg (https://)', /^https:\/\//.test(fe.build?.args?.NEXT_PUBLIC_API_URL ?? ''), fe.build?.args?.NEXT_PUBLIC_API_URL ?? '(unset)');
+    check('frontend has no runtime environment (dev .env.local not carried over)', Object.keys(fe.environment ?? {}).length === 0);
     check('generated secrets are set (not placeholders)', !!be.JWT_SECRET && !/CHANGE_ME/.test(be.JWT_SECRET));
   }
 
@@ -124,6 +143,26 @@ try {
       site.includes(`{$${prefix}_APP_DOMAIN}`) && site.includes(`reverse_proxy ${env}-frontend:3000`)
       && site.includes(`{$${prefix}_API_DOMAIN}`) && site.includes(`reverse_proxy ${env}-backend:3001`));
   }
+
+  console.log('\n## images (Dockerfiles and .dockerignore)');
+  const read = (f) => readFileSync(path.join(repo, f), 'utf8');
+  for (const dir of ['backend', 'frontend']) {
+    const ignore = read(`${dir}/.dockerignore`).split('\n').map((l) => l.trim());
+    check(`${dir}/.dockerignore keeps env files (secrets) out of the image`,
+      ignore.includes('.env') && ignore.includes('.env.*') && ignore.includes('!.env.example') && ignore.includes('node_modules'));
+  }
+  const beDocker = read('backend/Dockerfile');
+  const stages = [...beDocker.matchAll(/^FROM\s+\S+(?:\s+AS\s+(\S+))?/gim)].map((m) => m[1] ?? '(unnamed)');
+  check('backend Dockerfile has a migrate stage and the runtime image is still the last stage',
+    stages.includes('migrate') && stages[stages.length - 1] === '(unnamed)', stages.join(' > '));
+  check('migrate stage runs `prisma migrate deploy`', /FROM builder AS migrate\s+CMD \["npx", "prisma", "migrate", "deploy"\]/.test(beDocker));
+  const feDocker = read('frontend/Dockerfile');
+  check('frontend Dockerfile declares the NEXT_PUBLIC_* build args before `next build`',
+    ['NEXT_PUBLIC_API_URL', 'NEXT_PUBLIC_LINE_ADD_FRIEND_URL', 'NEXT_PUBLIC_TELEGRAM_BOT_USERNAME'].every((v) => {
+      const arg = feDocker.indexOf(`ARG ${v}`);
+      return arg !== -1 && arg < feDocker.indexOf('RUN npm run build');
+    }));
+  check('the local full-stack build keeps a working default API URL', /ARG NEXT_PUBLIC_API_URL=http:\/\/localhost:3001/.test(feDocker));
 
   console.log('\n## dev stack (docker-compose.yml alone)');
   const dev = compose(['-f', 'docker-compose.yml']);
