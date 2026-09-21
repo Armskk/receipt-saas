@@ -1,3 +1,4 @@
+import '../test/env';
 import { Type } from '@nestjs/common';
 import { AppModule } from '../app.module';
 import { AgentService } from '../agent/agent.service';
