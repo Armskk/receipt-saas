@@ -1,11 +1,13 @@
 // Prisma schema — self-hosted Postgres, multi-tenant via workspaceId.
 //
-// Row-Level Security: Prisma can't declare RLS policies itself. After your
-// first migration, run prisma/rls.sql once against the database — it locks
-// every workspace-scoped table so a query missing a workspaceId filter
-// returns nothing instead of leaking another tenant's rows. This is a
-// second line of defense on top of the application-level scoping already
-// done in each service (see workspaces/workspace.guard.ts).
+// Row-Level Security: Prisma can't declare RLS policies itself, so they live
+// in the hand-written migration `*_enable_rls`. It locks every
+// workspace-scoped table (categories, receipts, receipt_items, usage_logs) so
+// a query missing a workspaceId filter returns nothing instead of leaking
+// another tenant's rows. This is a second line of defense on top of the
+// application-level scoping (see workspaces/workspace.guard.ts). Tenant
+// queries must run inside PrismaService.withWorkspace(), and the app must
+// connect as the `receipts_app` role (APP_DATABASE_URL), not the owner.
 
 generator client {
   provider = "prisma-client-js"

@@ -26,10 +26,10 @@ export class ReceiptProcessingProcessor extends WorkerHost {
     const { receiptId, workspaceId } = job.data;
     this.logger.log(`Processing receipt ${receiptId} (workspace ${workspaceId})`);
 
-    await this.receipts.markProcessing(receiptId);
+    await this.receipts.markProcessing(workspaceId, receiptId);
 
     try {
-      const receipt = await this.receipts.get(receiptId);
+      const receipt = await this.receipts.get(workspaceId, receiptId);
       const images = await Promise.all(
         receipt.imageKeys.map(async (key) => {
           const { base64, contentType } = await this.storage.getImageBase64(key);
@@ -46,7 +46,7 @@ export class ReceiptProcessingProcessor extends WorkerHost {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       this.logger.error(`Receipt ${receiptId} failed: ${message}`);
-      await this.receipts.markFailed(receiptId, message);
+      await this.receipts.markFailed(workspaceId, receiptId, message);
       throw err; // let BullMQ apply its retry policy
     }
   }

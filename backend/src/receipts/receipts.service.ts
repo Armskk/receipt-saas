@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, ReceiptSource } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentExtractionResult } from '../agent/agent.service';
@@ -30,6 +30,11 @@ function dayKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// A row hidden by RLS (another tenant's, or a bad id) surfaces as P2025 on update.
+function isRecordNotFound(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025';
+}
+
 @Injectable()
 export class ReceiptsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -41,30 +46,45 @@ export class ReceiptsService {
     sourceRef?: string;
     createdByUserId?: string;
   }) {
-    return this.prisma.receipt.create({
-      data: {
-        workspaceId: params.workspaceId,
-        imageKeys: params.imageKeys,
-        source: params.source,
-        sourceRef: params.sourceRef,
-        createdByUserId: params.createdByUserId,
-        status: 'PENDING',
-      },
-    });
+    return this.prisma.withWorkspace(params.workspaceId, (tx) =>
+      tx.receipt.create({
+        data: {
+          workspaceId: params.workspaceId,
+          imageKeys: params.imageKeys,
+          source: params.source,
+          sourceRef: params.sourceRef,
+          createdByUserId: params.createdByUserId,
+          status: 'PENDING',
+        },
+      }),
+    );
   }
 
-  markProcessing(receiptId: string) {
-    return this.prisma.receipt.update({
-      where: { id: receiptId },
-      data: { status: 'PROCESSING' },
-    });
+  markProcessing(workspaceId: string, receiptId: string) {
+    return this.updateStatus(workspaceId, receiptId, { status: 'PROCESSING' });
   }
 
-  markFailed(receiptId: string, reason: string) {
-    return this.prisma.receipt.update({
-      where: { id: receiptId },
-      data: { status: 'FAILED', failureReason: reason },
-    });
+  markFailed(workspaceId: string, receiptId: string, reason: string) {
+    return this.updateStatus(workspaceId, receiptId, { status: 'FAILED', failureReason: reason });
+  }
+
+  confirm(workspaceId: string, receiptId: string) {
+    return this.updateStatus(workspaceId, receiptId, { status: 'CONFIRMED' });
+  }
+
+  private async updateStatus(
+    workspaceId: string,
+    receiptId: string,
+    data: Prisma.ReceiptUpdateInput,
+  ) {
+    try {
+      return await this.prisma.withWorkspace(workspaceId, (tx) =>
+        tx.receipt.update({ where: { id: receiptId }, data }),
+      );
+    } catch (err) {
+      if (isRecordNotFound(err)) throw new NotFoundException('Receipt not found');
+      throw err;
+    }
   }
 
   /**
@@ -80,7 +100,7 @@ export class ReceiptsService {
   ) {
     const { parsed, inputTokens, outputTokens } = result;
 
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.withWorkspace(workspaceId, async (tx) => {
       const categoryNames = [
         ...new Set(
           parsed.items
@@ -139,26 +159,25 @@ export class ReceiptsService {
     });
   }
 
-  confirm(receiptId: string) {
-    return this.prisma.receipt.update({
-      where: { id: receiptId },
-      data: { status: 'CONFIRMED' },
-    });
-  }
-
   listForWorkspace(workspaceId: string) {
-    return this.prisma.receipt.findMany({
-      where: { workspaceId },
-      include: { items: { include: { category: true } } },
-      orderBy: { createdAt: 'desc' },
-    });
+    return this.prisma.withWorkspace(workspaceId, (tx) =>
+      tx.receipt.findMany({
+        where: { workspaceId },
+        include: { items: { include: { category: true } } },
+        orderBy: { createdAt: 'desc' },
+      }),
+    );
   }
 
-  get(receiptId: string) {
-    return this.prisma.receipt.findUniqueOrThrow({
-      where: { id: receiptId },
-      include: { items: { include: { category: true } } },
-    });
+  async get(workspaceId: string, receiptId: string) {
+    const receipt = await this.prisma.withWorkspace(workspaceId, (tx) =>
+      tx.receipt.findUnique({
+        where: { id: receiptId },
+        include: { items: { include: { category: true } } },
+      }),
+    );
+    if (!receipt) throw new NotFoundException('Receipt not found');
+    return receipt;
   }
 
   /**
@@ -168,10 +187,12 @@ export class ReceiptsService {
    * agent couldn't read a date.
    */
   async availableMonths(workspaceId: string): Promise<string[]> {
-    const receipts = await this.prisma.receipt.findMany({
-      where: { workspaceId, status: COUNTED_STATUSES },
-      select: { purchaseDate: true, createdAt: true },
-    });
+    const receipts = await this.prisma.withWorkspace(workspaceId, (tx) =>
+      tx.receipt.findMany({
+        where: { workspaceId, status: COUNTED_STATUSES },
+        select: { purchaseDate: true, createdAt: true },
+      }),
+    );
     const months = new Set<string>();
     for (const r of receipts) {
       months.add((r.purchaseDate ?? r.createdAt).toISOString().slice(0, 7));
@@ -186,17 +207,19 @@ export class ReceiptsService {
   async monthlySummary(workspaceId: string, month: string) {
     const { start, end } = monthRange(month);
 
-    const receipts = await this.prisma.receipt.findMany({
-      where: {
-        workspaceId,
-        status: COUNTED_STATUSES,
-        OR: [
-          { purchaseDate: { gte: start, lt: end } },
-          { AND: [{ purchaseDate: null }, { createdAt: { gte: start, lt: end } }] },
-        ],
-      },
-      include: { items: { include: { category: true } } },
-    });
+    const receipts = await this.prisma.withWorkspace(workspaceId, (tx) =>
+      tx.receipt.findMany({
+        where: {
+          workspaceId,
+          status: COUNTED_STATUSES,
+          OR: [
+            { purchaseDate: { gte: start, lt: end } },
+            { AND: [{ purchaseDate: null }, { createdAt: { gte: start, lt: end } }] },
+          ],
+        },
+        include: { items: { include: { category: true } } },
+      }),
+    );
 
     const zero = new Prisma.Decimal(0);
     let total = zero;

@@ -35,12 +35,12 @@ export class ReceiptsController {
   }
 
   @Get(':receiptId')
-  get(@Param('receiptId') receiptId: string) {
-    return this.receiptsService.get(receiptId);
+  get(@Param('workspaceId') workspaceId: string, @Param('receiptId') receiptId: string) {
+    return this.receiptsService.get(workspaceId, receiptId);
   }
 
   @Patch(':receiptId/confirm')
-  confirm(@Param('receiptId') receiptId: string) {
-    return this.receiptsService.confirm(receiptId);
+  confirm(@Param('workspaceId') workspaceId: string, @Param('receiptId') receiptId: string) {
+    return this.receiptsService.confirm(workspaceId, receiptId);
   }
 }

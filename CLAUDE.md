@@ -20,13 +20,13 @@ Backend (`cd backend`):
 - `npm run worker` — BullMQ worker process via ts-node (must run alongside the API; it's what actually calls Claude)
 - `npm run build` — `nest build`; `npm run start:prod` runs the built API, `npm run worker:prod` runs the built worker
 - `npm run lint` — eslint with `--fix` over `src`
-- `npm test` — jest. Run a single file with `npx jest path/to/file.spec.ts`; there are no spec files yet, this is wired but unused
+- `npm test` — jest (in-band). The specs are integration tests against a real Postgres because RLS can't be mocked: set `TEST_DATABASE_URL` (owner role) and `TEST_APP_DATABASE_URL` (`receipts_app` role) to a dedicated `*_test` database — jest's global setup creates it if missing and runs `prisma migrate deploy`. Run a single file with `npx jest path/to/file.spec.ts`
 - `npm run prisma:generate` — regenerate the Prisma client after editing `schema.prisma`
-- `npm run prisma:migrate` — `prisma migrate dev`; after the *first* migration on a fresh database, also run `prisma/rls.sql` once directly against Postgres (Prisma can't apply RLS policies itself — see the comment block at the top of `schema.prisma`)
+- `npm run prisma:migrate` — `prisma migrate dev`. RLS policies and the app role's grants live in the hand-written `*_enable_rls` migration, so migrating applies them — there is no separate SQL script to run. `DATABASE_URL` (owner role) is used by the Prisma CLI only; the API and worker connect as the non-privileged `receipts_app` role via `APP_DATABASE_URL`. On a fresh Postgres volume `docker/postgres/init-app-role.sh` creates that role from `APP_DB_PASSWORD`; on an existing volume create it once by hand (the script's header has the command)
 
 Frontend (`cd frontend`): `npm run dev`, `npm run build`, `npm run lint`.
 
-Infra: `docker compose up -d postgres redis minio` for local dev deps; full stack including Caddy via `docker compose up -d --build` (see root `.env.example`, `backend/.env.example`, `frontend/.env.example` for required vars — `ANTHROPIC_API_KEY`, `DATABASE_URL`, `JWT_SECRET` are the minimum to run anything).
+Infra: `docker compose up -d postgres redis minio` for local dev deps; full stack including Caddy via `docker compose up -d --build` (see root `.env.example`, `backend/.env.example`, `frontend/.env.example` for required vars — `ANTHROPIC_API_KEY`, `DATABASE_URL`, `APP_DATABASE_URL`, `JWT_SECRET` are the minimum to run anything).
 
 ## Architecture
 
@@ -45,7 +45,7 @@ Infra: `docker compose up -d postgres redis minio` for local dev deps; full stac
 
 **Receipt status machine:** `PENDING` → `PROCESSING` → `PARSED` (agent succeeded, awaiting user confirmation) → `CONFIRMED`, or `PROCESSING` → `FAILED` (with `failureReason`). Only `PARSED`/`CONFIRMED` receipts count toward spend in `receipts.service.ts#monthlySummary`.
 
-**Multi-tenancy is enforced twice.** Every workspace-scoped table carries `workspaceId` (or, for `ReceiptItem`, scopes indirectly through its parent `Receipt`). Application-level: `workspaces/workspace.guard.ts` checks the JWT user is a member of the `:workspaceId` route param before any handler runs. Database-level: `prisma/rls.sql` enables Postgres Row-Level Security on the same tables, gated on `current_setting('app.current_workspace_id')` — this is a second line of defense so a query that forgot its `WHERE workspaceId = ...` returns nothing instead of another tenant's rows. **This means any code path that runs raw/Prisma queries against these tables must `SET app.current_workspace_id` on the connection first, or RLS will silently return zero rows** — not yet wired into a Prisma middleware/interceptor.
+**Multi-tenancy is enforced twice.** Every workspace-scoped table carries `workspaceId` (or, for `ReceiptItem`, scopes indirectly through its parent `Receipt`). Application-level: `workspaces/workspace.guard.ts` checks the JWT user is a member of the `:workspaceId` route param before any handler runs. Database-level: the `*_enable_rls` migration turns on Postgres Row-Level Security for `categories`, `receipts`, `receipt_items` (via the parent receipt) and `usage_logs`, gated on `current_setting('app.current_workspace_id')` — a second line of defense so a query that forgot its `WHERE workspaceId = ...` returns nothing instead of another tenant's rows. **Every query on those tables must run inside `PrismaService.withWorkspace(workspaceId, tx => ...)`, which sets the variable transaction-locally; outside it RLS returns zero rows.** `users`, `workspaces` and `workspace_members` are intentionally not under RLS (they're read before a workspace is known: signup, "my workspaces", webhook channel-id lookup). RLS only applies to a non-superuser role, so the app connects as `receipts_app` (`APP_DATABASE_URL`) and `PrismaService` refuses to start in production if it's connected as a role that bypasses RLS. Rationale in `docs/decisions.md`.
 
 **LINE/Telegram → workspace linking isn't built yet.** `Workspace.lineUserId` / `telegramChatId` are meant to be set via a "connect" flow in the dashboard (a one-time code the user sends to the bot), but that handler doesn't exist — currently webhook events from an unrecognized `lineUserId`/`chatId` are just logged and dropped.
 
@@ -53,12 +53,12 @@ Infra: `docker compose up -d postgres redis minio` for local dev deps; full stac
 
 **Frontend ↔ backend contract:** `frontend/app/lib/api.ts` is the only place that calls the backend — it mirrors the Prisma model shapes as TypeScript interfaces by hand (no generated client), so a schema change needs a matching manual update there. `useWorkspace.ts` is the shared hook (dashboard + summary page) that loads the workspace list and remembers the active one in `localStorage`.
 
-**What's stubbed:** `billing/` is an empty module (wire up Stripe/Omise later). No signup/password-reset email flow. No seed data. No tests written yet despite jest being configured.
+**What's stubbed:** `billing/` is an empty module (wire up Stripe/Omise later). No signup/password-reset email flow. No seed data. Test coverage so far is only the RLS/tenant-isolation integration specs (`prisma.rls.spec.ts`, `receipts.service.spec.ts`).
 
 ## Project goals
 - Working, demoable product in 4–6 weeks; this is also my main portfolio piece for job applications. Prefer shipping a complete end-to-end flow over polishing one module.
 - Hosting plan: Oracle Cloud Always Free (Ampere VM), whole docker-compose on one VM. No paid tiers or free trials.
-- Next milestone: wire `SET app.current_workspace_id` so RLS actually enforces isolation (currently not wired, see Architecture).
+- Done: RLS wired end to end (see Architecture, `docs/decisions.md`). Next milestone: the LINE/Telegram → workspace connect flow.
 
 ## Rules
 - Never commit or print values from .env files.
