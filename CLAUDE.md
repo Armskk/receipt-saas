@@ -27,7 +27,7 @@ Backend (`cd backend`):
 
 Frontend (`cd frontend`): `npm run dev`, `npm run build`, `npm run lint`.
 
-Infra: `docker compose up -d postgres redis minio` for local dev deps; full stack including Caddy via `docker compose up -d --build` (see root `.env.example`, `backend/.env.example`, `frontend/.env.example` for required vars — `ANTHROPIC_API_KEY`, `DATABASE_URL`, `APP_DATABASE_URL`, `JWT_SECRET` are the minimum to run anything).
+Infra: `docker compose up -d postgres redis minio` for local dev deps (their ports bind to `127.0.0.1` only); full dev stack including Caddy via `docker compose up -d --build` (see root `.env.example`, `backend/.env.example`, `frontend/.env.example` for required vars — `ANTHROPIC_API_KEY`, `DATABASE_URL`, `APP_DATABASE_URL`, `JWT_SECRET` are the minimum to run anything). **Deployed environments** (stg/production) are separate compose projects layered with `docker-compose.prod.yml` — they publish no host ports; one shared Caddy (`docker-compose.edge.yml`) is the only thing on 80/443. Create their env files with `scripts/init-env.sh` (never hand-copy secrets between environments); runbook in `docs/environments.md`. `node scripts/check-compose.mjs` (CI job `compose`) verifies the setup without starting containers.
 
 ## Architecture
 
@@ -57,7 +57,7 @@ Infra: `docker compose up -d postgres redis minio` for local dev deps; full stac
 **What's stubbed:** `billing/` is an empty module (wire up Stripe/Omise later). No signup/password-reset email flow. No seed data. Tests: the RLS/tenant-isolation and channel-linking integration specs (real Postgres), a few unit specs, and `npm run e2e` for the split API/worker (not in CI).
 
 ## Branches & environments
-Flow: `feature/* → dev → stg → main` — **`main` is production**, `dev` is the default branch (PRs target it). Promote `dev → stg → main` with PRs using **merge commits, not squash**; never commit directly to `stg`/`main`. Branch protection isn't available (private repo, GitHub Free), so `.github/workflows/ci.yml` (`flow-guard`, `backend`, `frontend`) is what enforces it — merge only when green. dev runs locally; stg/prod will be separate compose projects on the Oracle VM with separate secrets, bots and data. Details and the queued deployment roadmap: `docs/environments.md`.
+Flow: `feature/* → dev → stg → main` — **`main` is production**, `dev` is the default branch (PRs target it). Promote `dev → stg → main` with PRs using **merge commits, not squash**; never commit directly to `stg`/`main`. Branch protection isn't available (private repo, GitHub Free), so `.github/workflows/ci.yml` (`flow-guard`, `backend`, `frontend`, `compose`) is what enforces it — merge only when green. dev runs locally; stg/prod will be separate compose projects on the Oracle VM with separate secrets, bots and data. Details and the queued deployment roadmap: `docs/environments.md`.
 
 ## Project goals
 - Working, demoable product in 4–6 weeks; this is also my main portfolio piece for job applications. Prefer shipping a complete end-to-end flow over polishing one module.

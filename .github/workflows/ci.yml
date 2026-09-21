@@ -98,3 +98,16 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+  # Static checks of the deployment compose files (no containers): a deployed environment
+  # publishes no host ports, only the shared edge Caddy publishes 80/443, environments don't
+  # share secrets or aliases, dev ports stay on localhost. See scripts/check-compose.mjs.
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: docker compose version
+      - run: node scripts/check-compose.mjs

@@ -1,0 +1,2 @@
+# Intentionally empty: mounted in place of an environment's site file while that
+# environment is not enabled (see docker-compose.edge.yml).

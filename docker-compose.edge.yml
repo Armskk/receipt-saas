@@ -1,0 +1,47 @@
+# The one Caddy for the whole VM: the only thing that publishes ports (80/443), and it
+# routes by domain to whichever environments are enabled. It is its own compose project
+# (receipt-edge), separate from the environments, so an env can be rebuilt or torn down
+# without touching TLS or the other env.
+#
+#   docker network create receipt-edge        # once per VM
+#   docker compose -p receipt-edge --env-file .env.edge -f docker-compose.edge.yml up -d
+#
+# Enabling an environment = setting its EDGE_*_SITE variable in .env.edge (see
+# scripts/init-env.sh edge). A disabled one gets the empty disabled.caddy, so Caddy never
+# tries to get certificates for domains that aren't set up yet. HTTPS is automatic.
+# Only TCP 80/443 are published (no UDP/HTTP3), matching the firewall rule of 22/80/443.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      STG_APP_DOMAIN: ${STG_APP_DOMAIN:-}
+      STG_API_DOMAIN: ${STG_API_DOMAIN:-}
+      PROD_APP_DOMAIN: ${PROD_APP_DOMAIN:-}
+      PROD_API_DOMAIN: ${PROD_API_DOMAIN:-}
+    volumes:
+      - ./deploy/edge/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${EDGE_STG_SITE:-./deploy/edge/sites/disabled.caddy}:/etc/caddy/sites/stg.caddy:ro
+      - ${EDGE_PROD_SITE:-./deploy/edge/sites/disabled.caddy}:/etc/caddy/sites/production.caddy:ro
+      - caddy-data:/data # certificates: keep this volume, or Let's Encrypt rate limits bite
+      - caddy-config:/config
+    networks:
+      - edge
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  edge:
+    external: true
+    name: receipt-edge
+
+volumes:
+  caddy-data:
+  caddy-config:
