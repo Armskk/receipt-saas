@@ -55,6 +55,9 @@ Infra: `docker compose up -d postgres redis minio` for local dev deps; full stac
 
 **What's stubbed:** `billing/` is an empty module (wire up Stripe/Omise later). No signup/password-reset email flow. No seed data. Test coverage so far is only the RLS/tenant-isolation integration specs (`prisma.rls.spec.ts`, `receipts.service.spec.ts`).
 
+## Branches & environments
+Flow: `feature/* → dev → stg → main` — **`main` is production**, `dev` is the default branch (PRs target it). Promote `dev → stg → main` with PRs using **merge commits, not squash**; never commit directly to `stg`/`main`. Branch protection isn't available (private repo, GitHub Free), so `.github/workflows/ci.yml` (`flow-guard`, `backend`, `frontend`) is what enforces it — merge only when green. dev runs locally; stg/prod will be separate compose projects on the Oracle VM with separate secrets, bots and data. Details and the queued deployment roadmap: `docs/environments.md`.
+
 ## Project goals
 - Working, demoable product in 4–6 weeks; this is also my main portfolio piece for job applications. Prefer shipping a complete end-to-end flow over polishing one module.
 - Hosting plan: Oracle Cloud Always Free (Ampere VM), whole docker-compose on one VM. No paid tiers or free trials.
