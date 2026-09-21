@@ -3,6 +3,18 @@
 Short records of architectural decisions that aren't obvious from the code.
 Newest first.
 
+## 2026-09-21 — The receipt processor is registered only in the worker process
+
+**Context.** `ReceiptProcessingProcessor` was a provider of `QueueModule`, which `AppModule` imports, and both `main.ts` and `worker.ts` booted `AppModule`. So the API process also started a BullMQ worker, competed for jobs and called Claude itself — the opposite of why the worker is a separate process (webhooks must get a fast 200 OK). Found in the first end-to-end run.
+
+**Decisions.**
+
+1. **`QueueModule` is queue plumbing only** (`BullModule.forRoot` + `registerQueue`), shared by both processes: the API enqueues through it, the worker consumes through it.
+2. **`WorkerModule` (`queue/worker.module.ts`) is the worker's root module** and the only place `ReceiptProcessingProcessor` and `AgentModule` are registered. `worker.ts` boots it instead of `AppModule`.
+3. **`AppModule` no longer imports `AgentModule`**, so the API has no path to the Claude client at all. `queue/worker-module.spec.ts` reads the Nest module metadata and fails if the processor or `AgentService` shows up in the API's module graph — no Redis or Postgres needed.
+
+**Consequences.** A new job consumer goes in `WorkerModule`, not in a module the API imports. The API no longer needs `ANTHROPIC_API_KEY`; only the worker does.
+
 ## 2026-09-21 — Three long-lived branches: dev → stg → main (= production)
 
 **Context.** One branch, no CI, never deployed. Wanted a dev/staging/production flow before the first deploy.

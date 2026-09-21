@@ -30,7 +30,7 @@ Infra: `docker compose up -d postgres redis minio` for local dev deps; full stac
 
 ## Architecture
 
-**Modular monolith, not microservices.** One NestJS app (`backend/src/app.module.ts`) with bounded modules, plus a BullMQ worker that's the *same codebase* running as a separate process (`backend/src/worker.ts` vs `backend/src/main.ts`) — split a module into its own service only if a real scaling need shows up.
+**Modular monolith, not microservices.** One NestJS app (`backend/src/app.module.ts`) with bounded modules, plus a BullMQ worker that's the *same codebase* running as a separate process (`backend/src/worker.ts` vs `backend/src/main.ts`). The worker boots its own root module, `queue/worker.module.ts` (`WorkerModule`), not `AppModule`; that's the only place `ReceiptProcessingProcessor` and `AgentModule` are registered, so the API never consumes jobs or reaches Claude (`queue/worker-module.spec.ts` enforces it) — split a module into its own service only if a real scaling need shows up.
 
 **Why there's a separate worker process:** ingestion controllers (`ingestion/*.controller.ts`) only validate the incoming image and enqueue a `process` job on the `RECEIPT_PROCESSING_QUEUE`, then return immediately — this matters because LINE/Telegram webhooks expect a fast 200 OK. `queue/receipt-processing.processor.ts`, running in the `worker` process, is what actually downloads the image from storage, calls `agent/agent.service.ts` (the Claude API), and writes results via `receipts/receipts.service.ts`. The API process must stay responsive even while Claude is "thinking" on a receipt.
 

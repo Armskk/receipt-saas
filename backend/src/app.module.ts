@@ -5,7 +5,6 @@ import { CommonModule } from './common/common.module';
 import { AuthModule } from './auth/auth.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
 import { ReceiptsModule } from './receipts/receipts.module';
-import { AgentModule } from './agent/agent.module';
 import { QueueModule } from './queue/queue.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { BillingModule } from './billing/billing.module';
@@ -18,7 +17,6 @@ import { BillingModule } from './billing/billing.module';
     AuthModule,
     WorkspacesModule,
     ReceiptsModule,
-    AgentModule,
     QueueModule,
     IngestionModule,
     BillingModule,
