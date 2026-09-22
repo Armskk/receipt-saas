@@ -1,0 +1,53 @@
+name: Deploy stg
+
+# Automates the "Bring stg up" step of docs/stg-provisioning-checklist.md: SSH
+# to the VM, build+start the receipt-stg compose project there (ARM64, so it
+# must build on the VM, not the runner), and smoke-test /health. Steps 1-8 of
+# that checklist (VM, DNS, LINE/Telegram bots, env files, first manual `up`)
+# must already be done by hand before this workflow can do anything useful.
+
+on:
+  push:
+    branches: [stg]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-stg
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: stg
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.STG_SSH_KEY }}
+          SSH_HOST: ${{ secrets.STG_SSH_HOST }}
+          SSH_USER: ${{ secrets.STG_SSH_USER }}
+          DEPLOY_PATH: ${{ vars.STG_DEPLOY_PATH }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          install -m 600 /dev/null /tmp/deploy_key
+          printf '%s\n' "$SSH_KEY" > /tmp/deploy_key
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" bash -s <<EOF
+            set -euo pipefail
+            cd "$DEPLOY_PATH"
+            git fetch origin stg
+            git checkout --detach "$DEPLOY_SHA"
+            docker compose -p receipt-stg --env-file .env.stg \
+              -f docker-compose.yml -f docker-compose.prod.yml \
+              up -d --build --wait --wait-timeout 180
+            docker compose -p receipt-stg --env-file .env.stg \
+              -f docker-compose.yml -f docker-compose.prod.yml ps
+          EOF
+
+      - name: Smoke test /health
+        env:
+          API_DOMAIN: ${{ vars.STG_API_DOMAIN }}
+        run: curl -fsS --retry 10 --retry-delay 3 --retry-connrefused "https://$API_DOMAIN/health"

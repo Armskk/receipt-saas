@@ -107,7 +107,7 @@ Step 1 (branches, CI, these docs) is done. The rest is queued in this order.
 Step-by-step checklist for the parts that have to be done by hand (Oracle account, DNS, LINE/Telegram credentials, GitHub secrets): `docs/stg-provisioning-checklist.md`.
 - [ ] Provision the Oracle Ampere (**ARM64**) VM, install Docker, create stg DNS records.
 - [ ] Create a separate LINE channel and Telegram bot for stg and register the stg webhooks.
-- [ ] GitHub Environment `stg` with the deploy secrets (SSH key/host). `.github/workflows/deploy-stg.yml` on push to `stg`: SSH → `git pull` → `docker compose -p receipt-stg -f … up -d --build` (build on the VM so images are natively ARM64) → run migrate → hit `/health`.
+- [x] `.github/workflows/deploy-stg.yml` — **done**: on push to `stg` (or manual `workflow_dispatch`), SSHes to the VM, `git checkout`s the pushed commit, runs `docker compose -p receipt-stg -f … up -d --build --wait` (build on the VM so images are natively ARM64; `--wait` blocks on the `migrate` service and the API's healthcheck, so a failed migration fails the deploy), then curls `/health`. Needs the GitHub Environment `stg` with secrets `STG_SSH_HOST`/`STG_SSH_USER`/`STG_SSH_KEY` and variables `STG_DEPLOY_PATH`/`STG_API_DOMAIN` — not yet created (Step 3 in `docs/stg-provisioning-checklist.md`, item 9).
 - [ ] Synthetic data only on stg.
 - [ ] Run the end-to-end check against stg: signup → upload → parse → confirm → summary, and cross-tenant 404/403.
 
