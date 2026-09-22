@@ -160,21 +160,27 @@ serving yet just means LINE/Telegram will retry and eventually mark it unhealthy
       Order 123 against a real chat for the first time — until now it was only ever tested with
       the bot's HTTP token blanked out).
 
-## 9. GitHub Environment + deploy secrets (only needed once `deploy-stg.yml` exists)
+## 9. GitHub Environment + deploy secrets
 
-Not required for steps 1–8 above — this is what a future automated deploy will need. Doing it
-now saves a round trip later, but there is nothing to test until the workflow exists.
+`.github/workflows/deploy-stg.yml` already exists — it runs on push to `stg` (or manually via
+`workflow_dispatch`) and does exactly what step 7 does by hand: SSH in, `git checkout` the
+pushed commit, `docker compose -p receipt-stg … up -d --build --wait`, then curl `/health`. It
+has nothing to connect to until this step is done.
 
 - [ ] In GitHub → repo **Settings → Environments**, create an environment named `stg`.
-- [ ] Add secrets scoped to it (never repo-wide, so a `production` environment added later can
-      hold different values): `STG_SSH_HOST` (the VM's IP or DNS), `STG_SSH_USER` (`ubuntu`),
-      `STG_SSH_KEY` (the **private** key from step 1 — paste it directly into the GitHub secret
-      field, never into a file in the repo or into chat).
+- [ ] Add **secrets** scoped to it (never repo-wide, so a `production` environment added later
+      can hold different values): `STG_SSH_HOST` (the VM's IP or DNS), `STG_SSH_USER`
+      (`ubuntu`), `STG_SSH_KEY` (the **private** key from step 1 — paste it directly into the
+      GitHub secret field, never into a file in the repo or into chat).
+- [ ] Add **variables** scoped to the same environment (not secrets — these aren't sensitive):
+      `STG_DEPLOY_PATH` (the absolute path of the repo checkout on the VM from step 2's
+      `git clone`, e.g. `/home/ubuntu/receipt-saas`) and `STG_API_DOMAIN` (step 3's API domain,
+      e.g. `api-stg.yourdomain.com`, no `https://` prefix — the workflow builds the URL itself).
 - [ ] Optional but recommended: an environment protection rule (even just "restrict to the
       `stg` branch") so a stray workflow run on another branch can't target this environment.
-- [ ] Nothing to run yet — `deploy-stg.yml` (SSH → `git pull` → the same `up -d --build` from
-      step 7 → migrate → hit `/health`) is a separate, later piece of work that will consume
-      these secrets.
+- [ ] Once the secrets/variables are set and steps 1–8 have brought stg up manually at least
+      once, push to `stg` (or run the workflow manually) to confirm the automated deploy works
+      the same way the manual one in step 7 did.
 
 ## When this is done
 
