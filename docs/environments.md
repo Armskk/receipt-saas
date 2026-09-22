@@ -104,6 +104,7 @@ Step 1 (branches, CI, these docs) is done. The rest is queued in this order.
 - [ ] Oracle VM firewall (security list + iptables): open only 22/80/443. The procedure and how to verify it are in the runbook above; it can only be applied and checked once the VM exists (Step 3). The compose side is already safe without it — nothing but Caddy publishes a port.
 
 ### Step 3 — first deployment: stg
+Step-by-step checklist for the parts that have to be done by hand (Oracle account, DNS, LINE/Telegram credentials, GitHub secrets): `docs/stg-provisioning-checklist.md`.
 - [ ] Provision the Oracle Ampere (**ARM64**) VM, install Docker, create stg DNS records.
 - [ ] Create a separate LINE channel and Telegram bot for stg and register the stg webhooks.
 - [ ] GitHub Environment `stg` with the deploy secrets (SSH key/host). `.github/workflows/deploy-stg.yml` on push to `stg`: SSH → `git pull` → `docker compose -p receipt-stg -f … up -d --build` (build on the VM so images are natively ARM64) → run migrate → hit `/health`.
