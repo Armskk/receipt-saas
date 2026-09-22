@@ -3,6 +3,20 @@
 Short records of architectural decisions that aren't obvious from the code.
 Newest first.
 
+## 2026-09-22 — Making the app deployable: migrations, build-time frontend config, CORS, /health
+
+**Context.** With the compose layout in place (previous entry) a first `up` still wouldn't have produced a working app: the runtime image has no Prisma CLI (so the schema was never applied), `NEXT_PUBLIC_API_URL` was only supplied at run time although `next build` inlines it, the API accepted requests from any origin, and there was nothing to smoke-test with. There was also no `.dockerignore`, so `COPY . .` baked `backend/.env` and `frontend/.env.local` — and on the VM `backend/.env.stg` — into the images.
+
+**Decisions.**
+
+1. **Migrations are a one-shot `migrate` compose service** built from a `migrate` stage of `backend/Dockerfile` (the builder stage has the Prisma CLI; the runtime image stays production-deps-only and remains the last stage). It runs `prisma migrate deploy` with `OWNER_DATABASE_URL` on every `up`; the API and worker wait for `service_completed_successfully`, so nothing ever starts against an unmigrated schema, and a failed migration stops the deploy. It is the *only* service holding the DB owner credential. Migrations stay forward-only (expand/contract for breaking changes).
+2. **`NEXT_PUBLIC_*` are Docker build args** (`NEXT_PUBLIC_API_URL`, plus the optional LINE/Telegram deep-link vars from the connect page), passed per environment from `.env.<env>`; changing one needs `up --build`. The Dockerfile default keeps the local full-stack build on `http://localhost:3001`. The frontend needs no runtime env, so its env file is gone.
+3. **`.dockerignore` for backend and frontend** excludes every env file (except `*.example`), `node_modules`, build output and `backend/scripts`.
+4. **CORS is an allow-list**: `CORS_ORIGINS` (comma-separated bare origins). Unset in dev → `http://localhost:3000`; unset in production → the API **refuses to start** (a silently open API and a silently locked-out dashboard are both worse than a failed deploy); `*` and malformed entries are rejected everywhere. Webhooks are server-to-server and unaffected.
+5. **`GET /health`** is public and reports only up/down: 200 when Postgres (`SELECT 1`) and the receipt queue (`getJobCounts`, i.e. the path the API enqueues through) answer within 2 s each, otherwise 503 with the failing check marked `down` and no error text. MinIO and the Claude API are deliberately not checked — an outage there shouldn't mark the API down. The API's compose healthcheck uses it (busybox `wget`), and it is the deploy smoke test and uptime-monitor target.
+
+**Consequences.** A new schema change needs no extra deploy step, but a migration that can't be rolled back must be split across two deploys. Anything that reads a `NEXT_PUBLIC_*` value at build time must be added to the frontend Dockerfile and the prod override. On a Postgres volume that predates the first `up`, `receipts_app` must be created by hand (the init script only runs on a fresh volume).
+
 ## 2026-09-22 — Deployed environments: private compose projects behind one shared Caddy
 
 **Context.** Before the first deploy the compose file published Postgres, Redis, MinIO, the API and the frontend on every host interface (`5432/6379/9000/9001/3001/3000`), had a Caddy per stack (two projects on one VM can't both bind 80/443), read fixed `backend/.env` / `frontend/.env.local` paths, and `.gitignore` did not cover `.env.stg` / `.env.production` even though the docs said it did.

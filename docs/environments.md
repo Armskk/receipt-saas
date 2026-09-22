@@ -57,24 +57,36 @@ Postgres, Redis, MinIO and the worker are on the environment's private network o
 4. Firewall — see below.
 
 **Per environment** (`stg` shown; `production` is the same with `-p receipt-prod`)
-1. `scripts/init-env.sh stg`, then fill in the values it leaves open: `ANTHROPIC_API_KEY` (a key of its own for this environment, with a spend limit set in the Anthropic Console; on stg you can pick a cheaper `ANTHROPIC_MODEL`), `NEXT_PUBLIC_API_URL` (the environment's `https://` API URL), and the LINE/Telegram bot credentials (a **separate bot per environment** — a webhook URL belongs to exactly one bot).
+1. `scripts/init-env.sh stg`, then fill in the values it leaves open: `ANTHROPIC_API_KEY` (a key of its own for this environment, with a spend limit set in the Anthropic Console; on stg you can pick a cheaper `ANTHROPIC_MODEL`), the two `https://` URLs that must match the environment's domains in `.env.edge` — `NEXT_PUBLIC_API_URL` in `.env.stg` (the API domain) and `CORS_ORIGINS` in `backend/.env.stg` (the app domain) — and the LINE/Telegram bot credentials (a **separate bot per environment** — a webhook URL belongs to exactly one bot). `NEXT_PUBLIC_*` values are baked into the frontend at build time, so changing one needs `up -d --build`; the API refuses to start in production without `CORS_ORIGINS`.
 2. Start it:
    ```bash
    docker compose -p receipt-stg --env-file .env.stg -f docker-compose.yml -f docker-compose.prod.yml up -d --build
    ```
+   Order of events on `up`: Postgres/Redis/MinIO become healthy → the one-shot `migrate` service applies pending Prisma migrations (as the DB owner; the API and worker never hold that credential) → the API and worker start → the API reports `healthy` once `GET /health` answers. If `migrate` fails, the API and worker do not start: `docker compose -p receipt-stg logs migrate`.
 3. Start (or reload) the edge — once, and again whenever you enable/disable an environment or change a domain:
    ```bash
    docker compose -p receipt-edge --env-file .env.edge -f docker-compose.edge.yml up -d
    ```
+4. Smoke test: `curl -fsS https://<api domain>/health` → `{"status":"ok","checks":{"database":"up","redis":"up"}}` (503 with the failing dependency marked `down` otherwise), and `dc ps` (helper below) shows the API as `healthy`. `/health` is public and reports only up/down; it is also what an uptime monitor should poll.
 
-**Day 2** — nothing is published, so go through the containers: `docker compose -p receipt-stg exec postgres psql -U receipts receipts_saas`, `docker compose -p receipt-stg logs -f backend worker`. Logs are rotated (10 MB × 3 per container). Keep the `caddy-data` volume (`receipt-edge_caddy-data`): it holds the certificates.
+**Migrations.** They run automatically on every `up` and are **forward-only** (`prisma migrate deploy` applies only what's pending; there is no automatic down). For a breaking schema change use expand/contract across two deploys. On a Postgres volume that already existed before the first `up`, create the `receipts_app` role by hand first — `docker/postgres/init-app-role.sh` only runs on a fresh volume (the command is in its header); the `enable_rls` migration creates the role without a password if it's missing, and the API then can't log in.
+
+**Day 2** — nothing is published, so go through the containers. Every command needs the same project name, env file and compose files (without them compose loads only the base file and fails on the missing dev env files), so define a helper once per shell:
+```bash
+dc() { docker compose -p receipt-stg --env-file .env.stg -f docker-compose.yml -f docker-compose.prod.yml "$@"; }
+dc ps                                        # states, incl. the API's health
+dc logs -f backend worker                    # follow the app logs
+dc logs migrate                              # what the last migration run did
+dc exec postgres psql -U receipts receipts_saas
+```
+ Logs are rotated (10 MB × 3 per container). Keep the `caddy-data` volume (`receipt-edge_caddy-data`): it holds the certificates.
 
 **Firewall (Oracle VM) — written down, not yet applied.** The VM doesn't exist until Step 3; apply this then and run the verification below.
 - *Layer 1, the VCN security list (ingress):* TCP 22 (from your own IP if it's stable), TCP 80 and TCP 443 from anywhere — nothing else. UDP 443 stays closed (Caddy is only published on TCP, so no HTTP/3).
 - *Layer 2, iptables on the VM:* check `sudo iptables -S INPUT`, allow 22/80/443 plus established/loopback, drop the rest, and persist it (e.g. `netfilter-persistent save`). **Caveat:** ports that Docker publishes are DNATed and filtered in the `FORWARD`/`DOCKER` chains, not `INPUT`, so INPUT rules do not protect published container ports. That is why the compose setup publishes *only* Caddy's 80/443 and nothing else — the firewall is the second line, not the first. If a container port ever has to be published, restrict it in the `DOCKER-USER` chain.
 - *Verify (from outside):* `nmap -Pn -p- <vm-public-ip>` must show only 22, 80 and 443 open. *On the VM:* `docker ps --format '{{.Names}}\t{{.Ports}}'` shows ports only for `receipt-edge-caddy-1`.
 
-**Known gaps until the rest of Step 2 lands** (so a first `up` of stg won't be a working app yet): the schema isn't applied (the production backend image has no Prisma CLI — "Migrations in deploy" below), `NEXT_PUBLIC_API_URL` isn't baked into the frontend build (build arg below), CORS is still open, and there's no `/health` endpoint to smoke-test.
+**Still open** (Step 3): none of this has run on the Oracle VM yet — ARM64 images, real DNS/HTTPS certificates and the firewall are verified there. The deployed stack itself is complete: schema applied by `migrate`, the frontend built against the environment's API URL, CORS limited to the environment's app domain, and a `/health` endpoint to smoke-test with.
 
 ## Roadmap
 
@@ -84,10 +96,10 @@ Step 1 (branches, CI, these docs) is done. The rest is queued in this order.
 - [x] Fix the two known bugs first: (a) ~~`ReceiptProcessingProcessor` is registered in `QueueModule`, which both `main.ts` and `worker.ts` load, so the API also consumes jobs and calls Claude — register it only in the worker process~~ **done** — it's now provided only by `WorkerModule`, the worker's root module; (b) ~~API/worker race creating the MinIO bucket in `storage.service.ts#onModuleInit` — tolerate `BucketAlreadyOwnedByYou`~~ **done** — `onModuleInit` now treats `BucketAlreadyOwnedByYou` from `makeBucket` as success (other errors, including `BucketAlreadyExists`, still throw).
 - [x] `docker-compose.prod.yml` override — **done**: no environment publishes any host port (Postgres/Redis/MinIO/backend/frontend/worker are only on the project's private network; backend and frontend also join the shared `receipt-edge` network under per-environment aliases); the per-project Caddy is switched off; each env runs as its own project (`-p receipt-stg` / `-p receipt-prod`) and **one shared Caddy** (`docker-compose.edge.yml`, `deploy/edge/`) is the only thing publishing 80/443 and routes by domain. The dev stack now binds its ports to `127.0.0.1` only. See the runbook above; `scripts/check-compose.mjs` (CI job `compose`) enforces it.
 - [x] Per-env env files — **done**: `scripts/init-env.sh <stg|production|edge>` writes the gitignored files with fresh random secrets per environment (and wires the compose hostnames; the DB *owner* URL is kept out of the API/worker env). `.gitignore` previously did **not** ignore `.env.stg`/`.env.production`; it now ignores every `.env.*` except `*.example`. Still to do by hand: a spend cap / cheaper model on stg is an Anthropic Console + `ANTHROPIC_MODEL` setting.
-- [ ] Frontend build arg: `NEXT_PUBLIC_API_URL` is inlined at `next build` but compose only supplies it at runtime — add `ARG NEXT_PUBLIC_API_URL` to `frontend/Dockerfile`, pass it per environment, and check `.dockerignore` so `.env.local` isn't copied into images.
-- [ ] Migrations in deploy: the production image has no Prisma CLI (`npm install --omit=dev`; `prisma` is a devDependency). Add a one-shot `migrate` service/stage running `prisma migrate deploy` with the **owner** `DATABASE_URL` before `backend`/`worker` start. `receipts_app` must exist first — `docker/postgres/init-app-role.sh` only runs on a fresh volume, so document the manual step for existing ones.
-- [ ] Restrict CORS: `main.ts` calls `app.enableCors()` with no origin — limit it to `APP_DOMAIN` outside dev.
-- [ ] Add `GET /health` (DB + Redis) for deploy smoke tests and uptime checks.
+- [x] Frontend build arg — **done**: `frontend/Dockerfile` takes `NEXT_PUBLIC_API_URL` (and the optional `NEXT_PUBLIC_LINE_ADD_FRIEND_URL` / `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME`) as build args, `docker-compose.prod.yml` passes them per environment from `.env.<env>`, and the frontend has no runtime env any more. There was no `.dockerignore` at all, so `COPY . .` baked `backend/.env` / `frontend/.env.local` (and on the VM `backend/.env.stg`) into the images; both now have one that excludes every env file.
+- [x] Migrations in deploy — **done**: a `migrate` build stage (from the builder stage, which has the Prisma CLI) and a one-shot `migrate` service in `docker-compose.prod.yml` running `prisma migrate deploy` with `OWNER_DATABASE_URL`; the API and worker wait for it (`service_completed_successfully`). The manual step for an existing volume (create `receipts_app` first) is in the runbook.
+- [x] Restrict CORS — **done**: `CORS_ORIGINS` (comma-separated bare origins) is the allow-list; unset in dev it defaults to `http://localhost:3000`, unset in production the API refuses to start, and `*` or malformed entries are rejected (`backend/src/common/cors.ts`).
+- [x] `GET /health` — **done**: public, 200 when Postgres and Redis answer (2 s timeout each), 503 naming the failing one otherwise, no error text; the API's compose healthcheck uses it.
 - [x] Caddy — **done**: per-env domains (`STG_APP_DOMAIN`, `STG_API_DOMAIN`, `PROD_APP_DOMAIN`, `PROD_API_DOMAIN` in `.env.edge`), enabled per environment; HTTPS is automatic (verified locally with `*.localhost` domains and Caddy's internal CA; public certificates need real DNS, Step 3).
 - [ ] Oracle VM firewall (security list + iptables): open only 22/80/443. The procedure and how to verify it are in the runbook above; it can only be applied and checked once the VM exists (Step 3). The compose side is already safe without it — nothing but Caddy publishes a port.
 

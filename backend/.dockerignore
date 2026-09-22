@@ -1,0 +1,13 @@
+# Keep secrets and build output out of the image (COPY . . would otherwise bake in
+# backend/.env, backend/.env.stg, ... — every layer is readable by anyone who can pull the image).
+.env
+.env.*
+!.env.example
+node_modules
+dist
+coverage
+*.log
+# not needed at runtime
+scripts
+Dockerfile
+.dockerignore
