@@ -46,7 +46,15 @@ const RECORD_RECEIPT_TOOL: Anthropic.Tool = {
       },
       discountTotal: {
         type: 'number',
-        description: 'Sum of all discounts/coupons applied, as a positive number',
+        description:
+          'The amount subtracted from the sum of item amounts to reach the final total, as a ' +
+          'positive number — i.e. sum(items[].amount) - discountTotal must equal total. Only ' +
+          'set this for a discount/coupon/promo applied on top of the item prices shown (e.g. a ' +
+          'separate "Discount"/"ส่วนลด" line, or a bill-level percentage off). If an item\'s price ' +
+          'already reflects a markdown (a struck-through original price next to a lower sale ' +
+          'price, or a "was/now" pair) and you used the lower sale price as that item\'s amount, ' +
+          'do NOT also report that markdown here — it is already baked into the item price and ' +
+          'reporting it again would double it. Omit this field entirely when there is no discount.',
       },
       total: { type: 'number', description: 'Final amount actually paid' },
       notes: {
@@ -63,7 +71,12 @@ You may be given more than one image: these are multiple photos of the SAME rece
 sections of a long receipt, front and back, or the pages of a multi-page bill). Combine them into \
 a single result — do not double-count line items that appear in the overlap between two photos. \
 The receipt may be in Thai, English, or a mix of both. Read every line item carefully, including \
-per-item prices, quantities, discounts, and the final total paid. If the photos clearly show \
+per-item prices, quantities, discounts, and the final total paid. sum(items[].amount) minus \
+discountTotal must equal total — if an item's own price already reflects a markdown (a struck-\
+through original price shown next to a lower sale price), use the lower sale price as that \
+item's amount and do not also put that same markdown into discountTotal, or it will be counted \
+twice. discountTotal is only for a discount applied on top of the item prices you extracted. If \
+the photos clearly show \
 different, unrelated receipts, extract only the first one and say so in "notes". If text is \
 unclear, make your best reading and note the uncertainty in "notes" rather than guessing silently. \
 Call record_receipt once with the combined result.`;
@@ -144,6 +157,19 @@ export class AgentService {
         `Agent output failed validation: ${JSON.stringify(errors)} — raw: ${JSON.stringify(rawInput)}`,
       );
       throw new BadGatewayException('Agent output did not match the expected receipt shape');
+    }
+
+    // Not enforced (the schema/prompt guidance can still be misread), just
+    // logged: sum(items) - discountTotal should equal total. A mismatch
+    // beyond rounding means discountTotal was double-counted or missed
+    // relative to the item amounts — worth a human glancing at the receipt.
+    const itemsSum = parsed.items.reduce((sum, item) => sum + item.amount, 0);
+    const reconciled = itemsSum - (parsed.discountTotal ?? 0);
+    if (Math.abs(reconciled - parsed.total) > 0.01) {
+      this.logger.warn(
+        `Agent output has an inconsistent discountTotal: items sum ${itemsSum} - discountTotal ` +
+          `${parsed.discountTotal ?? 0} = ${reconciled}, but total is ${parsed.total}`,
+      );
     }
 
     return {

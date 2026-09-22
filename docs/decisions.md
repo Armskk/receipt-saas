@@ -3,6 +3,47 @@
 Short records of architectural decisions that aren't obvious from the code.
 Newest first.
 
+## 2026-09-22 — discountTotal must reconcile against item prices, not double-count markdowns
+
+**Context.** Order 120.5: a real receipt with an end-of-bill discount came back with
+`discountTotal` null and item amounts summing to almost double the total. There was no sample
+of that receipt to reproduce with (deleted at the user's request), so this was investigated with
+synthetic fixtures run against the real Claude API (`backend/scripts/agent-samples/`, same
+pattern as `scripts/e2e/`). Several deliberately tricky variants — Thai wording, a percent-only
+discount with no printed amount, two separate discount lines, a discount buried in an 18-item
+receipt, even a faded/low-contrast discount line — all reconciled correctly; the exact reported
+symptom wasn't reproduced. One related bug *was* found: a receipt with per-item "was / now"
+markdown pricing (original price struck through, no separate discount line at all). The agent
+correctly used the sale price for each item (so `items` summed to `total`), but *also* reported
+the markdown itself as `discountTotal` — so `sum(items) - discountTotal` no longer matched
+`total`, even though every individual field looked plausible on its own. The schema's
+description ("sum of all discounts/coupons applied") never said `discountTotal` must reconcile
+against the item amounts, so the agent had no reason not to report a markdown as a "discount"
+too.
+
+**Decisions.**
+
+1. **`discountTotal`'s tool-schema description and the extraction prompt** in
+   `agent.service.ts` now state the invariant directly: `sum(items[].amount) - discountTotal`
+   must equal `total`, and a markdown/sale price already used as an item's amount must not also
+   be reported as `discountTotal` — that would double it. Verified against both fixtures in
+   `backend/scripts/agent-samples/` (real Claude calls): the markdown case now correctly comes
+   back with `discountTotal` null.
+2. **A non-blocking reconciliation check in `extractReceipt`** logs a warning (does not reject)
+   when `sum(items) - discountTotal` disagrees with `total` by more than rounding. Nothing
+   downstream currently enforces this invariant, so a future model response that still gets it
+   wrong fails visibly in logs instead of silently writing an inconsistent receipt — the same
+   "fail visibly rather than leak" philosophy as the RLS `withWorkspace` wrapper, applied here to
+   model output instead of tenant isolation.
+3. **`backend/scripts/agent-samples/`** holds the fixtures and a `check.ts` script for
+   re-verifying this by hand after future prompt/schema changes — not part of CI, real API cost,
+   same shape as `scripts/e2e/`.
+
+**Consequences.** The originally reported symptom (items sum ≈ 2× total, `discountTotal` null)
+is still unreproduced; it likely needs a real messy photo rather than a clean synthetic render.
+If/when a sample of that receipt turns up, add it to `backend/scripts/agent-samples/fixtures/`
+and re-run `check.ts` before assuming this fix covers it too.
+
 ## 2026-09-22 — Making the app deployable: migrations, build-time frontend config, CORS, /health
 
 **Context.** With the compose layout in place (previous entry) a first `up` still wouldn't have produced a working app: the runtime image has no Prisma CLI (so the schema was never applied), `NEXT_PUBLIC_API_URL` was only supplied at run time although `next build` inlines it, the API accepted requests from any origin, and there was nothing to smoke-test with. There was also no `.dockerignore`, so `COPY . .` baked `backend/.env` and `frontend/.env.local` — and on the VM `backend/.env.stg` — into the images.
