@@ -18,7 +18,7 @@ jobs:
   # repo is private on GitHub Free, so it can't be made a required check.
   flow-guard:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check PR direction
         env:
@@ -39,7 +39,7 @@ jobs:
           echo "OK: '$HEAD' -> '$BASE'"
 
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: backend
@@ -84,7 +84,7 @@ jobs:
         run: npm test
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
@@ -103,7 +103,7 @@ jobs:
   # publishes no host ports, only the shared edge Caddy publishes 80/443, environments don't
   # share secrets or aliases, dev ports stay on localhost. See scripts/check-compose.mjs.
   compose:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
