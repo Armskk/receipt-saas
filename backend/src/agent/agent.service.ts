@@ -21,7 +21,13 @@ const RECORD_RECEIPT_TOOL: Anthropic.Tool = {
   input_schema: {
     type: 'object',
     properties: {
-      merchantName: { type: 'string', description: 'Store/vendor name, if legible' },
+      merchantName: {
+        type: 'string',
+        description:
+          'Store/vendor name, if legible. Omit this field entirely if the name is not visible ' +
+          'or not clearly legible in the photo(s) — never invent one or use a placeholder like ' +
+          '"unknown"/"<UNKNOWN>".',
+      },
       purchaseDate: {
         type: 'string',
         description: 'ISO 8601 date (YYYY-MM-DD) if printed on the receipt; omit if not visible',
@@ -149,6 +155,20 @@ export class AgentService {
     // Tool input is normally a parsed object; guard against a stringified one.
     const rawInput: unknown =
       typeof toolUse.input === 'string' ? JSON.parse(toolUse.input) : toolUse.input;
+
+    // The prompt/schema tell Claude to omit merchantName rather than invent a
+    // placeholder, but that instruction can still be misread — strip an
+    // "unknown"-shaped value the same as an omitted field rather than storing
+    // and displaying it verbatim (seen in practice: literal "<UNKNOWN>").
+    if (
+      rawInput &&
+      typeof rawInput === 'object' &&
+      'merchantName' in rawInput &&
+      typeof (rawInput as { merchantName?: unknown }).merchantName === 'string' &&
+      /^<?unknown>?$/i.test((rawInput as { merchantName: string }).merchantName.trim())
+    ) {
+      delete (rawInput as { merchantName?: unknown }).merchantName;
+    }
 
     const parsed = plainToInstance(ParsedReceiptDto, rawInput);
     const errors = await validate(parsed);
