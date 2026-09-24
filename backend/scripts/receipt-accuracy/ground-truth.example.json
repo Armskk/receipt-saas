@@ -1,0 +1,10 @@
+{
+  "merchantName": "7-Eleven",
+  "purchaseDate": "2026-09-20",
+  "items": [
+    { "description": "Water 600ml", "amount": 10 },
+    { "description": "Bread", "amount": 25 }
+  ],
+  "discountTotal": 0,
+  "total": 35
+}
