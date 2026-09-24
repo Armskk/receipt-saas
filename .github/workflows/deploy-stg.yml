@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: stg
     steps:
       - name: Deploy over SSH
