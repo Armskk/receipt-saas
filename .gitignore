@@ -15,3 +15,6 @@ coverage/
 .turbo/
 minio-data/
 postgres-data/
+# Real receipt photos are personal financial data — never committed (see
+# CLAUDE.md's environment matrix and backend/scripts/receipt-accuracy/README.md).
+backend/scripts/receipt-accuracy/samples/
