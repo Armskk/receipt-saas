@@ -1,0 +1,55 @@
+name: Deploy production
+
+# Mirrors deploy-stg.yml for the receipt-prod compose project. Unlike stg, this does NOT
+# trigger on every push to main: GitHub Environment required-reviewers now works here (the
+# repo is public), but a manual/tag trigger is a deliberate extra gate for production on top
+# of that, not a workaround for it. Trigger by pushing a `v*` tag (cut from main) or by running
+# this workflow manually and picking the ref. Step 4 of docs/environments.md and
+# docs/production-provisioning-checklist.md must already be done by hand before this workflow
+# can do anything useful (VM, DNS, LINE/Telegram bots, env files, first manual `up`).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          DEPLOY_PATH: ${{ vars.PROD_DEPLOY_PATH }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          install -m 600 /dev/null /tmp/deploy_key
+          printf '%s\n' "$SSH_KEY" > /tmp/deploy_key
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=accept-new "$SSH_USER@$SSH_HOST" bash -s <<EOF
+            set -euo pipefail
+            cd "$DEPLOY_PATH"
+            git fetch origin main --tags
+            git checkout --detach "$DEPLOY_SHA"
+            docker compose -p receipt-prod --env-file .env.production \
+              -f docker-compose.yml -f docker-compose.prod.yml \
+              up -d --build --wait --wait-timeout 180
+            docker compose -p receipt-prod --env-file .env.production \
+              -f docker-compose.yml -f docker-compose.prod.yml ps
+          EOF
+
+      - name: Smoke test /health
+        env:
+          API_DOMAIN: ${{ vars.PROD_API_DOMAIN }}
+        run: curl -fsS --retry 10 --retry-delay 3 --retry-connrefused "https://$API_DOMAIN/health"
